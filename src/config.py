@@ -17,6 +17,9 @@ class DataConfig:
     min_price_threshold: float = 0.1  # Filter out erroneous prices
     outlier_std_threshold: float = 5.0  # Remove extreme outliers
     
+    # Statistical validation thresholds
+    cointegration_pvalue: float = 0.05  # Threshold for cointegration test
+
 @dataclass
 class StrategyConfig:
     """Mean-reversion strategy parameters"""
@@ -29,7 +32,6 @@ class StrategyConfig:
     # Enhanced parameters
     lookback_period: int = 252  # Days for long-term mean estimation
     half_life_max: int = 60  # Max acceptable mean-reversion half-life
-    cointegration_pvalue: float = 0.05  # Threshold for cointegration test
     
     # Regime detection
     use_regime_filter: bool = True
@@ -40,6 +42,11 @@ class StrategyConfig:
     use_dynamic_thresholds: bool = True
     vol_lookback: int = 100
     
+    # Position pyramiding
+    scale_in_enabled: bool = True
+    scale_in_threshold: float = 0.5  # Add to position if z-score increases by this
+    max_pyramid_levels: int = 2
+
 @dataclass
 class RiskConfig:
     """Risk management parameters"""
@@ -52,12 +59,7 @@ class RiskConfig:
     atr_period: int = 14
     atr_stop_multiple: float = 2.5
     atr_target_multiple: float = 4.0
-    
-    # Position management
-    scale_in_enabled: bool = True
-    scale_in_threshold: float = 0.5  # Add to position if z-score increases by this
-    max_pyramid_levels: int = 2
-    
+
 @dataclass
 class BacktestConfig:
     """Backtesting parameters"""
@@ -71,6 +73,9 @@ class BacktestConfig:
     train_test_split: float = 0.7
     rolling_window_days: int = 504  # 2 years
     
+    # Initial capital (for backtester)
+    initial_capital: float = 500_000
+
 @dataclass
 class OutputConfig:
     """Output and reporting configuration"""

@@ -6,6 +6,7 @@ Author: Alexander Robbins
 Date: 2025
 """
 
+from logging import config
 import pandas as pd
 import numpy as np
 import warnings
@@ -91,13 +92,14 @@ def main():
     # === 5. APPLY RISK MANAGEMENT ===
     print("\n" + "=" * 70)
     risk_manager = RiskManager(config.risk)
-    
     try:
-        risk_adjusted_signals = risk_manager.apply_risk_filters(df, signals)
+        # FIX: Align df to match signals index
+        df_aligned = df.loc[signals.index]  # <-- ADD THIS LINE
+        risk_adjusted_signals = risk_manager.apply_risk_filters(df_aligned, signals)  # <-- USE df_aligned
     except Exception as e:
         print(f"\n❌ Error applying risk management: {e}")
         return
-    
+        
     # === 6. RUN BACKTEST ===
     print("\n" + "=" * 70)
     backtester = Backtester(config.backtest)
