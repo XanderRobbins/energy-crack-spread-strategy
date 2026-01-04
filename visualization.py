@@ -1,6 +1,7 @@
 """
-Professional visualization suite for crack spread strategy
+Professional visualization suite for pairs trading strategies
 Publication-quality charts with institutional aesthetics
+Works with any asset pair: stocks, ETFs, futures, commodities, crypto
 """
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -21,9 +22,10 @@ plt.rcParams['xtick.labelsize'] = 10
 plt.rcParams['ytick.labelsize'] = 10
 plt.rcParams['legend.fontsize'] = 10
 
-class Visualizer:
+
+class PairsVisualizer:
     """
-    Comprehensive visualization toolkit for trading strategy analysis
+    Comprehensive visualization toolkit for pairs trading strategy analysis
     
     Features:
     - Price and spread charts
@@ -33,10 +35,26 @@ class Visualizer:
     - Z-score with signal overlays
     - Monte Carlo simulation results
     - Risk metrics visualization
+    - Works with ANY asset pair
     """
     
-    def __init__(self, config):
+    def __init__(self, config, pair_name: Optional[str] = None,
+                 asset1_name: Optional[str] = None,
+                 asset2_name: Optional[str] = None):
+        """
+        Initialize visualizer
+        
+        Args:
+            config: Configuration object
+            pair_name: Descriptive name for the pair (e.g., 'SPY-QQQ')
+            asset1_name: Display name for Asset 1 (e.g., 'S&P 500')
+            asset2_name: Display name for Asset 2 (e.g., 'Nasdaq 100')
+        """
         self.config = config
+        self.pair_name = pair_name or config.pair.pair_name
+        self.asset1_name = asset1_name or config.pair.asset1_ticker
+        self.asset2_name = asset2_name or config.pair.asset2_ticker
+        
         self.colors = {
             'primary': '#2E86AB',      # Blue
             'secondary': '#A23B72',    # Purple
@@ -50,56 +68,60 @@ class Visualizer:
     def plot_price_series(self, df: pd.DataFrame, 
                          save_path: Optional[str] = None):
         """
-        Plot CL and HO price series with volume
+        Plot Asset1 and Asset2 price series with volume
         
         Args:
-            df: DataFrame with OHLCV data
+            df: DataFrame with OHLCV data (Asset1/Asset2 columns)
             save_path: Optional path to save figure
         """
         fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
         
-        # Crude Oil Price
-        axes[0].plot(df.index, df['CL_Close'], 
-                    label='Crude Oil (CL)', 
+        # Asset 1 Price
+        axes[0].plot(df.index, df['Asset1_Close'], 
+                    label=self.asset1_name, 
                     color=self.colors['primary'], 
                     linewidth=1.5)
-        axes[0].set_title('Crude Oil Futures (CL=F)', fontweight='bold')
+        axes[0].set_title(f'{self.asset1_name} Price', fontweight='bold')
         axes[0].set_ylabel('Price ($)', fontweight='bold')
         axes[0].legend(loc='best')
         axes[0].grid(True, alpha=0.3)
         
-        # Heating Oil Price
-        axes[1].plot(df.index, df['HO_Close'], 
-                    label='Heating Oil (HO)', 
+        # Asset 2 Price
+        axes[1].plot(df.index, df['Asset2_Close'], 
+                    label=self.asset2_name, 
                     color=self.colors['secondary'], 
                     linewidth=1.5)
-        axes[1].set_title('Heating Oil Futures (HO=F)', fontweight='bold')
+        axes[1].set_title(f'{self.asset2_name} Price', fontweight='bold')
         axes[1].set_ylabel('Price ($)', fontweight='bold')
         axes[1].legend(loc='best')
         axes[1].grid(True, alpha=0.3)
         
         # Volume comparison
-        axes[2].bar(df.index, df['CL_Volume'], 
-                   label='CL Volume', 
-                   color=self.colors['primary'], 
-                   alpha=0.6, width=1)
-        axes[2].bar(df.index, df['HO_Volume'], 
-                   label='HO Volume', 
-                   color=self.colors['secondary'], 
-                   alpha=0.6, width=1)
-        axes[2].set_title('Trading Volume', fontweight='bold')
-        axes[2].set_ylabel('Volume', fontweight='bold')
-        axes[2].set_xlabel('Date', fontweight='bold')
-        axes[2].legend(loc='best')
-        axes[2].grid(True, alpha=0.3)
+        if 'Asset1_Volume' in df.columns and 'Asset2_Volume' in df.columns:
+            axes[2].bar(df.index, df['Asset1_Volume'], 
+                       label=f'{self.asset1_name} Volume', 
+                       color=self.colors['primary'], 
+                       alpha=0.6, width=1)
+            axes[2].bar(df.index, df['Asset2_Volume'], 
+                       label=f'{self.asset2_name} Volume', 
+                       color=self.colors['secondary'], 
+                       alpha=0.6, width=1)
+            axes[2].set_title('Trading Volume', fontweight='bold')
+            axes[2].set_ylabel('Volume', fontweight='bold')
+            axes[2].set_xlabel('Date', fontweight='bold')
+            axes[2].legend(loc='best')
+            axes[2].grid(True, alpha=0.3)
         
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=self.config.plot_dpi, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.config.output.plot_dpi, bbox_inches='tight')
             print(f"✅ Saved price series plot to: {save_path}")
         
-        plt.show()
+        if self.config.output.show_plots:
+            plt.show()
+        else:
+            plt.close()
     
     def plot_spread_analysis(self, signals: pd.DataFrame, 
                             save_path: Optional[str] = None):
@@ -114,11 +136,11 @@ class Visualizer:
         
         # === Spread with Bollinger Bands ===
         axes[0].plot(signals.index, signals['Spread'], 
-                    label='Log Price Spread (CL/HO)', 
+                    label=f'Price Spread ({self.pair_name})', 
                     color=self.colors['neutral'], 
                     linewidth=1.2)
         axes[0].plot(signals.index, signals['Rolling_Mean'], 
-                    label='30-Day Mean', 
+                    label=f'{self.config.strategy.window}-Day Mean', 
                     color=self.colors['danger'], 
                     linewidth=2, 
                     linestyle='--')
@@ -137,7 +159,7 @@ class Visualizer:
                             color=self.colors['accent'], 
                             label='±2 Std Dev')
         
-        axes[0].set_title('CL-HO Crack Spread with Mean-Reversion Bands', 
+        axes[0].set_title(f'{self.pair_name} Spread with Mean-Reversion Bands', 
                          fontweight='bold', fontsize=14)
         axes[0].set_ylabel('Spread', fontweight='bold')
         axes[0].legend(loc='best', framealpha=0.9)
@@ -168,7 +190,7 @@ class Visualizer:
                        color=self.colors['danger'], marker='v', s=100, 
                        label='Short Entry', zorder=5, edgecolors='black', linewidth=0.5)
         
-        axes[1].set_title('Z-Score with Trade Signals', fontweight='bold', fontsize=14)
+        axes[1].set_title(f'{self.pair_name} Z-Score with Trade Signals', fontweight='bold', fontsize=14)
         axes[1].set_ylabel('Z-Score', fontweight='bold')
         axes[1].legend(loc='best', framealpha=0.9)
         axes[1].grid(True, alpha=0.3)
@@ -193,10 +215,13 @@ class Visualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=self.config.plot_dpi, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.config.output.plot_dpi, bbox_inches='tight')
             print(f"✅ Saved spread analysis plot to: {save_path}")
         
-        plt.show()
+        if self.config.output.show_plots:
+            plt.show()
+        else:
+            plt.close()
     
     def plot_equity_curve(self, results: pd.DataFrame, 
                          save_path: Optional[str] = None):
@@ -236,7 +261,7 @@ class Visualizer:
                             alpha=0.3,
                             label='Drawdown Period')
         
-        axes[0].set_title('Portfolio Equity Curve', fontweight='bold', fontsize=14)
+        axes[0].set_title(f'{self.pair_name} Portfolio Equity Curve', fontweight='bold', fontsize=14)
         axes[0].set_ylabel('Portfolio Value ($)', fontweight='bold')
         axes[0].legend(loc='best', framealpha=0.9)
         axes[0].grid(True, alpha=0.3)
@@ -264,10 +289,13 @@ class Visualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=self.config.plot_dpi, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.config.output.plot_dpi, bbox_inches='tight')
             print(f"✅ Saved equity curve plot to: {save_path}")
         
-        plt.show()
+        if self.config.output.show_plots:
+            plt.show()
+        else:
+            plt.close()
     
     def plot_trade_distribution(self, trades_df: pd.DataFrame, 
                                save_path: Optional[str] = None):
@@ -294,7 +322,7 @@ class Visualizer:
                 color=[self.colors['success'], self.colors['danger']],
                 alpha=0.7, edgecolor='black')
         ax1.axvline(0, color='black', linestyle='--', linewidth=2)
-        ax1.set_title('Trade P&L Distribution', fontweight='bold')
+        ax1.set_title(f'{self.pair_name} Trade P&L Distribution', fontweight='bold')
         ax1.set_xlabel('P&L (%)', fontweight='bold')
         ax1.set_ylabel('Frequency', fontweight='bold')
         ax1.legend()
@@ -358,6 +386,7 @@ class Visualizer:
         stats_text = f"""
         TRADE STATISTICS
         ─────────────────────
+        Pair: {self.pair_name}
         Total Trades: {len(trades_df)}
         Win Rate: {win_rate:.1f}%
         Avg Win: {wins.mean():.2f}%
@@ -373,10 +402,13 @@ class Visualizer:
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
         if save_path:
-            plt.savefig(save_path, dpi=self.config.plot_dpi, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.config.output.plot_dpi, bbox_inches='tight')
             print(f"✅ Saved trade distribution plot to: {save_path}")
         
-        plt.show()
+        if self.config.output.show_plots:
+            plt.show()
+        else:
+            plt.close()
     
     def plot_monthly_returns_heatmap(self, results: pd.DataFrame, 
                                     save_path: Optional[str] = None):
@@ -399,6 +431,7 @@ class Visualizer:
             'Return': monthly_returns.values
         })
         
+
         pivot = monthly_returns_df.pivot(index='Year', columns='Month', values='Return')
         pivot.columns = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                         'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -409,247 +442,21 @@ class Visualizer:
                    cbar_kws={'label': 'Monthly Return (%)'}, 
                    linewidths=0.5, linecolor='gray', ax=ax)
         
-        ax.set_title('Monthly Returns Heatmap (%)', fontweight='bold', fontsize=14, pad=20)
+        ax.set_title(f'{self.pair_name} Monthly Returns Heatmap (%)', 
+                     fontweight='bold', fontsize=14, pad=20)
         ax.set_xlabel('Month', fontweight='bold')
         ax.set_ylabel('Year', fontweight='bold')
         
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=self.config.plot_dpi, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.config.output.plot_dpi, bbox_inches='tight')
             print(f"✅ Saved monthly returns heatmap to: {save_path}")
         
-        plt.show()
-    
-    def plot_rolling_metrics(self, results: pd.DataFrame, 
-                            save_path: Optional[str] = None):
-        """
-        Plot rolling performance metrics
-        
-        Args:
-            results: Backtest results DataFrame
-            save_path: Optional path to save figure
-        """
-        fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
-        
-        # Rolling Sharpe Ratio
-        axes[0].plot(results.index, results['Rolling_Sharpe'],
-                    color=self.colors['primary'], linewidth=1.5)
-        axes[0].axhline(0, color='black', linestyle='--', linewidth=1)
-        axes[0].axhline(1, color=self.colors['success'], linestyle=':', linewidth=1, alpha=0.5)
-        
-        
-        
-        
-        axes[0].fill_between(results.index, 0, results['Rolling_Sharpe'],
-                        where=results['Rolling_Sharpe'] > 0,
-                        color=self.colors['success'], alpha=0.3)
-        axes[0].set_title('Rolling 60-Day Sharpe Ratio', fontweight='bold')
-        axes[0].set_ylabel('Sharpe Ratio', fontweight='bold')
-        axes[0].grid(True, alpha=0.3)
-        
-        # Rolling Volatility
-        axes[1].plot(results.index, results['Rolling_Volatility'],
-                    color=self.colors['warning'], linewidth=1.5)
-        axes[1].axhline(results['Rolling_Volatility'].mean(),
-                       color='black', linestyle='--', linewidth=1,
-                       label=f"Mean: {results['Rolling_Volatility'].mean():.2f}%")
-        axes[1].set_title('Rolling 60-Day Volatility', fontweight='bold')
-        axes[1].set_ylabel('Volatility (%)', fontweight='bold')
-        axes[1].legend()
-        axes[1].grid(True, alpha=0.3)
-        
-        # Rolling Win Rate
-        axes[2].plot(results.index, results['Rolling_Win_Rate'],
-                    color=self.colors['secondary'], linewidth=1.5)
-        axes[2].axhline(50, color='black', linestyle='--', linewidth=1)
-        axes[2].fill_between(results.index, 50, results['Rolling_Win_Rate'],
-                            where=results['Rolling_Win_Rate'] > 50,
-                            color=self.colors['success'], alpha=0.3)
-        axes[2].fill_between(results.index, 50, results['Rolling_Win_Rate'],
-                            where=results['Rolling_Win_Rate'] < 50,
-                            color=self.colors['danger'], alpha=0.3)
-        axes[2].set_title('Rolling 60-Day Win Rate', fontweight='bold')
-        axes[2].set_ylabel('Win Rate (%)', fontweight='bold')
-        axes[2].set_xlabel('Date', fontweight='bold')
-        axes[2].grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=self.config.plot_dpi, bbox_inches='tight')
-            print(f"✅ Saved rolling metrics plot to: {save_path}")
-        
-        plt.show()
-    
-    def plot_monte_carlo_results(self, mc_results: pd.DataFrame,
-                                 save_path: Optional[str] = None):
-        """
-        Visualize Monte Carlo simulation results
-        
-        Args:
-            mc_results: DataFrame with simulation results
-            save_path: Optional path to save figure
-        """
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        
-        # Distribution of final returns
-        axes[0, 0].hist(mc_results['Total_Return_Pct'], bins=50,
-                       color=self.colors['primary'], alpha=0.7, edgecolor='black')
-        axes[0, 0].axvline(mc_results['Total_Return_Pct'].mean(),
-                          color=self.colors['danger'], linestyle='--',
-                          linewidth=2, label=f"Mean: {mc_results['Total_Return_Pct'].mean():.2f}%")
-        axes[0, 0].axvline(0, color='black', linestyle='-', linewidth=1)
-        axes[0, 0].set_title('Distribution of Returns', fontweight='bold')
-        axes[0, 0].set_xlabel('Total Return (%)', fontweight='bold')
-        axes[0, 0].set_ylabel('Frequency', fontweight='bold')
-        axes[0, 0].legend()
-        axes[0, 0].grid(True, alpha=0.3)
-        
-        # Distribution of final portfolio values
-        axes[0, 1].hist(mc_results['Final_Value'], bins=50,
-                       color=self.colors['success'], alpha=0.7, edgecolor='black')
-        axes[0, 1].axvline(mc_results['Final_Value'].mean(),
-                          color=self.colors['danger'], linestyle='--',
-                          linewidth=2, label=f"Mean: ${mc_results['Final_Value'].mean():,.0f}")
-        axes[0, 1].set_title('Distribution of Final Portfolio Value', fontweight='bold')
-        axes[0, 1].set_xlabel('Portfolio Value ($)', fontweight='bold')
-        axes[0, 1].set_ylabel('Frequency', fontweight='bold')
-        axes[0, 1].legend()
-        axes[0, 1].grid(True, alpha=0.3)
-        axes[0, 1].xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x/1000:.0f}K'))
-        
-        # Box plot of returns
-        axes[1, 0].boxplot([mc_results['Total_Return_Pct']], vert=False,
-                          patch_artist=True,
-                          boxprops=dict(facecolor=self.colors['accent'], alpha=0.7))
-        axes[1, 0].axvline(0, color='black', linestyle='--', linewidth=1)
-        axes[1, 0].set_title('Return Distribution Summary', fontweight='bold')
-        axes[1, 0].set_xlabel('Total Return (%)', fontweight='bold')
-        axes[1, 0].grid(True, alpha=0.3)
-        
-        # Confidence intervals
-        percentiles = [5, 25, 50, 75, 95]
-        percentile_values = [np.percentile(mc_results['Total_Return_Pct'], p) for p in percentiles]
-        
-        axes[1, 1].barh(percentiles, percentile_values, 
-                       color=[self.colors['danger'], self.colors['warning'], 
-                              self.colors['primary'], self.colors['accent'], 
-                              self.colors['success']],
-                       alpha=0.7, edgecolor='black')
-        axes[1, 1].axvline(0, color='black', linestyle='--', linewidth=1)
-        axes[1, 1].set_title('Percentile Returns', fontweight='bold')
-        axes[1, 1].set_xlabel('Return (%)', fontweight='bold')
-        axes[1, 1].set_ylabel('Percentile', fontweight='bold')
-        axes[1, 1].grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=self.config.plot_dpi, bbox_inches='tight')
-            print(f"✅ Saved Monte Carlo results plot to: {save_path}")
-        
-        plt.show()
-    
-    def plot_regime_analysis(self, signals: pd.DataFrame,
-                            save_path: Optional[str] = None):
-        """
-        Visualize market regime classification
-        
-        Args:
-            signals: DataFrame with regime classifications
-            save_path: Optional path to save figure
-        """
-        fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
-        
-        # Spread with regime colors
-        for regime, color in [('Mean_Reverting', self.colors['success']),
-                             ('Trending_Up', self.colors['danger']),
-                             ('Trending_Down', self.colors['warning']),
-                             ('Volatile_Trending', self.colors['neutral'])]:
-            mask = signals['Regime_Composite'] == regime
-            if mask.any():
-                axes[0].scatter(signals[mask].index, signals[mask]['Spread'],
-                              c=color, label=regime, alpha=0.5, s=10)
-        
-        axes[0].plot(signals.index, signals['Rolling_Mean'],
-                    color='black', linewidth=2, label='Mean')
-        axes[0].set_title('Market Regime Classification', fontweight='bold')
-        axes[0].set_ylabel('Spread', fontweight='bold')
-        axes[0].legend(loc='best', framealpha=0.9)
-        axes[0].grid(True, alpha=0.3)
-        
-        # Regime transitions
-        regime_numeric = pd.Categorical(signals['Regime_Composite']).codes
-        axes[1].plot(signals.index, regime_numeric, linewidth=1.5,
-                    color=self.colors['primary'])
-        axes[1].fill_between(signals.index, 0, regime_numeric,
-                            alpha=0.3, color=self.colors['primary'])
-        axes[1].set_title('Regime Transitions Over Time', fontweight='bold')
-        axes[1].set_ylabel('Regime Code', fontweight='bold')
-        axes[1].set_xlabel('Date', fontweight='bold')
-        axes[1].grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=self.config.plot_dpi, bbox_inches='tight')
-            print(f"✅ Saved regime analysis plot to: {save_path}")
-        
-        plt.show()
-    
-    def create_full_report(self, df: pd.DataFrame, 
-                          signals: pd.DataFrame,
-                          results: pd.DataFrame,
-                          trades_df: pd.DataFrame):
-        """
-        Generate complete visual report
-        
-        Args:
-            df: Raw market data
-            signals: Strategy signals
-            results: Backtest results
-            trades_df: Individual trades
-        """
-        print("\n" + "=" * 60)
-        print("📊 GENERATING COMPREHENSIVE VISUAL REPORT")
-        print("=" * 60)
-        
-        output_dir = self.config.results_dir
-        
-        # 1. Price series
-        print("\n1️⃣  Generating price series plots...")
-        self.plot_price_series(df, save_path=f"{output_dir}/01_price_series.{self.config.plot_format}")
-        
-        # 2. Spread analysis
-        print("2️⃣  Generating spread analysis plots...")
-        self.plot_spread_analysis(signals, save_path=f"{output_dir}/02_spread_analysis.{self.config.plot_format}")
-        
-        # 3. Equity curve
-        print("3️⃣  Generating equity curve...")
-        self.plot_equity_curve(results, save_path=f"{output_dir}/03_equity_curve.{self.config.plot_format}")
-        
-        # 4. Trade distribution
-        if not trades_df.empty:
-            print("4️⃣  Generating trade distribution analysis...")
-            self.plot_trade_distribution(trades_df, save_path=f"{output_dir}/04_trade_distribution.{self.config.plot_format}")
-        
-        # 5. Monthly returns heatmap
-        print("5️⃣  Generating monthly returns heatmap...")
-        self.plot_monthly_returns_heatmap(results, save_path=f"{output_dir}/05_monthly_heatmap.{self.config.plot_format}")
-        
-        # 6. Rolling metrics
-        print("6️⃣  Generating rolling metrics...")
-        self.plot_rolling_metrics(results, save_path=f"{output_dir}/06_rolling_metrics.{self.config.plot_format}")
-        
-        # 7. Regime analysis
-        if 'Regime_Composite' in signals.columns:
-            print("7️⃣  Generating regime analysis...")
-            self.plot_regime_analysis(signals, save_path=f"{output_dir}/07_regime_analysis.{self.config.plot_format}")
-        
-        print("\n✅ Complete visual report generated!")
-        print(f"   All plots saved to: {output_dir}/")
-        print("=" * 60)
+        if self.config.output.show_plots:
+            plt.show()
+        else:
+            plt.close()
 
     def plot_rolling_cointegration(self, rolling_coint: pd.DataFrame, 
                                 save_path: Optional[str] = None):
@@ -670,7 +477,7 @@ class Visualizer:
         axes[0].fill_between(rolling_coint.index, 0, 0.05,
                             color=self.colors['success'], alpha=0.2, 
                             label='Cointegrated Zone (p < 0.05)')
-        axes[0].set_title('Rolling Cointegration P-Value Over Time', 
+        axes[0].set_title(f'{self.pair_name} Rolling Cointegration P-Value Over Time', 
                         fontweight='bold', fontsize=14)
         axes[0].set_ylabel('P-Value', fontweight='bold')
         axes[0].set_ylim([0, max(0.15, rolling_coint['Coint_PValue'].max())])
@@ -699,7 +506,10 @@ class Visualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=self.config.plot_dpi, bbox_inches='tight')
+            plt.savefig(save_path, dpi=self.config.output.plot_dpi, bbox_inches='tight')
             print(f"✅ Saved rolling cointegration plot to: {save_path}")
         
-        plt.show()
+        if self.config.output.show_plots:
+            plt.show()
+        else:
+            plt.close()

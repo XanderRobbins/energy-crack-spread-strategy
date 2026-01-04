@@ -1,6 +1,7 @@
 """
-Comprehensive risk management system for crack spread trading
+Comprehensive risk management system for pairs trading strategies
 Implements ATR-based position sizing, stop-loss, and portfolio controls
+Works with any asset pair: stocks, ETFs, futures, commodities, crypto
 """
 import pandas as pd
 import numpy as np
@@ -8,7 +9,8 @@ from typing import Tuple, Dict, Optional
 import warnings
 warnings.filterwarnings('ignore')
 
-class RiskManager:
+
+class PairsRiskManager:
     """
     Advanced risk management with multiple safety layers
     
@@ -19,13 +21,22 @@ class RiskManager:
     - Maximum position limits
     - Correlation-based exposure control
     - Drawdown protection
+    - Works with ANY asset pair
     """
     
-    def __init__(self, config):
+    def __init__(self, config, pair_name: Optional[str] = None):
+        """
+        Initialize risk manager
+        
+        Args:
+            config: Configuration object
+            pair_name: Optional descriptive name for the pair
+        """
         self.config = config
+        self.pair_name = pair_name or config.pair.pair_name
         self.current_positions = {}
         self.equity_curve = []
-        self.peak_equity = config.initial_capital
+        self.peak_equity = config.risk.initial_capital
         
     def calculate_atr(self, high: pd.Series, low: pd.Series, 
                      close: pd.Series, period: int = 14) -> pd.Series:
@@ -57,86 +68,98 @@ class RiskManager:
         return atr
     
     def calculate_position_size(self, df: pd.DataFrame, 
-                               signal: pd.Series) -> pd.Series:
+                               signal: pd.Series,
+                               asset_type: str = 'stock') -> pd.Series:
         """
-        Calculate optimal position size using volatility-adjusted methodology
-        
-        Position Size = (Capital * Risk%) / (ATR * Multiplier * Contract Multiplier)
+        Calculate optimal position size with clear hierarchy of constraints
         
         Args:
-            df: DataFrame with OHLC data
-            signal: Trading signal series (+1, -1, or 0)
+            df: DataFrame with market data (Asset1/Asset2)
+            signal: Trading signals
+            asset_type: 'stock', 'etf', 'futures', 'crypto'
         
         Returns:
-            pd.Series: Number of contracts to trade
+            pd.Series: Position sizes
         """
-        # Calculate ATR for both CL and HO
-        atr_cl = self.calculate_atr(
-            df['CL_High'], 
-            df['CL_Low'], 
-            df['CL_Close'],
-            period=self.config.atr_period
+        # Calculate ATR for volatility adjustment
+        atr_asset1 = self.calculate_atr(
+            df['Asset1_High'], df['Asset1_Low'], df['Asset1_Close'],
+            period=self.config.risk.atr_period
         )
         
-        atr_ho = self.calculate_atr(
-            df['HO_High'],
-            df['HO_Low'],
-            df['HO_Close'],
-            period=self.config.atr_period
+        atr_asset2 = self.calculate_atr(
+            df['Asset2_High'], df['Asset2_Low'], df['Asset2_Close'],
+            period=self.config.risk.atr_period
         )
         
-        # Use the average ATR for spread trading
-        avg_atr = (atr_cl + atr_ho) / 2
+        avg_atr = (atr_asset1 + atr_asset2) / 2
         
-        # Position size formula
-        # Risk amount per trade
-        risk_amount = self.config.initial_capital * self.config.risk_per_trade
+        # Step 1: Calculate base position size from risk tolerance
+        risk_amount = self.config.risk.initial_capital * self.config.risk.risk_per_trade
+        position_value = risk_amount / (avg_atr * self.config.risk.atr_stop_multiple)
         
-        # Position size in dollars
-        position_value = risk_amount / (avg_atr * self.config.atr_stop_multiple)
+        # Asset-specific multiplier (futures use contract size)
+        if asset_type == 'futures':
+            contract_size = self.config.backtest.contract_multiplier
+            position_size = position_value / (df['Asset1_Close'] * contract_size)
+        else:
+            # For stocks/ETFs: calculate number of shares/units
+            position_size = position_value / df['Asset1_Close']
         
-        # Convert to number of contracts (CL contract = 1000 barrels)
-        contract_size_cl = 1000  # barrels per contract
-        position_size = position_value / (df['CL_Close'] * contract_size_cl)
+        # Step 2: Apply hard limits (in order of priority)
         
-        # Cap at maximum position size
-        max_contracts = (
-            self.config.initial_capital * self.config.max_position_size
-        ) / (df['CL_Close'] * contract_size_cl)
+        # 2a. Maximum contracts/shares limit
+        if asset_type == 'futures':
+            MAX_CONTRACTS = 10
+            position_size = np.minimum(position_size, MAX_CONTRACTS)
+        else:
+            MAX_SHARES = 10000
+            position_size = np.minimum(position_size, MAX_SHARES)
         
-        position_size = np.minimum(position_size, max_contracts)
+        # 2b. Capital percentage limit
+        MAX_CAPITAL_PCT = 0.20
+        if asset_type == 'futures':
+            capital_limit = (
+                self.config.risk.initial_capital * MAX_CAPITAL_PCT
+            ) / (df['Asset1_Close'] * self.config.backtest.contract_multiplier)
+        else:
+            capital_limit = (
+                self.config.risk.initial_capital * MAX_CAPITAL_PCT
+            ) / df['Asset1_Close']
+        position_size = np.minimum(position_size, capital_limit)
         
-        # Only apply position sizing when we have an active signal
-        position_size = position_size * abs(signal)
+        # 2c. Portfolio-level maximum position from config
+        if asset_type == 'futures':
+            config_max = (
+                self.config.risk.initial_capital * self.config.risk.max_position_size
+            ) / (df['Asset1_Close'] * self.config.backtest.contract_multiplier)
+        else:
+            config_max = (
+                self.config.risk.initial_capital * self.config.risk.max_position_size
+            ) / df['Asset1_Close']
+        position_size = np.minimum(position_size, config_max)
         
-        # Round to nearest contract and ensure minimum of 1 contract when signal exists
+        # Step 3: Round and ensure minimum size
+        if asset_type == 'futures':
+            min_size = 1  # Minimum 1 contract
+        else:
+            min_size = 1  # Minimum 1 share
+            
         position_size = np.where(
-            signal != 0,
-            np.maximum(np.round(position_size), 1),
+            abs(signal) > 0,
+            np.maximum(np.round(position_size), min_size),
             0
         )
         
-                # === HARD CAPS TO PREVENT RUNAWAY SIZING ===
-        max_contracts_hard_limit = 10  # Never exceed 10 contracts
-        max_capital_pct = 0.20  # Never use more than 20% of capital
-
-        position_size = np.minimum(position_size, max_contracts_hard_limit)
-
-        # Also cap by capital percentage
-        capital_based_limit = (
-            self.config.initial_capital * max_capital_pct
-        ) / (df['CL_Close'] * 1000)
-
-        position_size = np.minimum(position_size, capital_based_limit)
-
-        # Only apply position sizing when we have an active signal
-
-
-        return position_size
+        # Step 4: Apply signal direction
+        position_size = position_size * np.sign(signal)
+        
+        return pd.Series(position_size, index=df.index)
     
     def set_stop_loss_take_profit(self, df: pd.DataFrame, 
                                    entry_price: float,
-                                   direction: int) -> Tuple[float, float]:
+                                   direction: int,
+                                   use_asset1: bool = True) -> Tuple[float, float]:
         """
         Calculate dynamic stop-loss and take-profit levels
         
@@ -144,24 +167,33 @@ class RiskManager:
             df: DataFrame with current market data
             entry_price: Entry price for the position
             direction: 1 for long, -1 for short
+            use_asset1: Use Asset1 for ATR (default True)
         
         Returns:
             Tuple of (stop_loss, take_profit) prices
         """
-        # Get current ATR
-        current_atr = self.calculate_atr(
-            df['CL_High'], 
-            df['CL_Low'], 
-            df['CL_Close'],
-            period=self.config.atr_period
-        ).iloc[-1]
+        # Get current ATR (use Asset1 by default)
+        if use_asset1:
+            current_atr = self.calculate_atr(
+                df['Asset1_High'], 
+                df['Asset1_Low'], 
+                df['Asset1_Close'],
+                period=self.config.risk.atr_period
+            ).iloc[-1]
+        else:
+            current_atr = self.calculate_atr(
+                df['Asset2_High'], 
+                df['Asset2_Low'], 
+                df['Asset2_Close'],
+                period=self.config.risk.atr_period
+            ).iloc[-1]
         
         if direction == 1:  # Long position
-            stop_loss = entry_price - (current_atr * self.config.atr_stop_multiple)
-            take_profit = entry_price + (current_atr * self.config.atr_target_multiple)
+            stop_loss = entry_price - (current_atr * self.config.risk.atr_stop_multiple)
+            take_profit = entry_price + (current_atr * self.config.risk.atr_target_multiple)
         else:  # Short position
-            stop_loss = entry_price + (current_atr * self.config.atr_stop_multiple)
-            take_profit = entry_price - (current_atr * self.config.atr_target_multiple)
+            stop_loss = entry_price + (current_atr * self.config.risk.atr_stop_multiple)
+            take_profit = entry_price - (current_atr * self.config.risk.atr_target_multiple)
         
         return stop_loss, take_profit
     
@@ -186,7 +218,7 @@ class RiskManager:
             risk_per_contract = abs(entry - stop) * size
             total_heat += risk_per_contract
         
-        return total_heat / self.config.initial_capital
+        return total_heat / self.config.risk.initial_capital
     
     def check_drawdown_limit(self, current_equity: float) -> bool:
         """
@@ -201,80 +233,81 @@ class RiskManager:
         self.peak_equity = max(self.peak_equity, current_equity)
         current_drawdown = (self.peak_equity - current_equity) / self.peak_equity
         
-        # Stop trading if drawdown exceeds 20%
-        max_allowed_drawdown = 0.20
+        # Get max allowed drawdown from config
+        max_allowed_drawdown = self.config.risk.max_drawdown_stop
         
         return current_drawdown > max_allowed_drawdown
     
+        
     def apply_risk_filters(self, df: pd.DataFrame, 
-                          signals: pd.DataFrame) -> pd.DataFrame:
-        """
-        Apply comprehensive risk filters to trading signals
-        
-        Filters applied:
-        1. ATR-based position sizing
-        2. Dynamic stop-loss and take-profit
-        3. Maximum portfolio heat
-        4. Drawdown protection
-        5. Time-based filters (no trading during high volatility events)
-        
-        Args:
-            df: Market data DataFrame
-            signals: Generated trading signals
-        
-        Returns:
-            DataFrame with risk-adjusted positions
-        """
+                        signals: pd.DataFrame,
+                        asset_type: str = 'stock') -> pd.DataFrame:
+        """Apply comprehensive risk filters to trading signals"""
         print("\n" + "=" * 60)
-        print("🛡️  APPLYING RISK MANAGEMENT FILTERS")
+        print(f"🛡️  APPLYING RISK MANAGEMENT: {self.pair_name}")
         print("=" * 60)
         
         # Create a copy to avoid modifying original
         risk_adjusted = signals.copy()
         
+        # ✅ FIX: Align df with signals index to prevent shape mismatch
+        df_aligned = df.loc[signals.index]  # ← ADD THIS LINE
+        
         # 1. Calculate position sizes
         print("\n1️⃣  Calculating position sizes...")
         risk_adjusted['Position_Size'] = self.calculate_position_size(
-            df, 
-            risk_adjusted['Position']
+            df_aligned,  # ← USE df_aligned instead of df
+            risk_adjusted['Position'],
+            asset_type=asset_type
         )
+        
+        # Rest of the method...
+        # Also update other df references to df_aligned:
         
         # 2. Calculate ATR for stop-loss/take-profit
         print("2️⃣  Setting stop-loss and take-profit levels...")
-        atr_cl = self.calculate_atr(
-            df['CL_High'], 
-            df['CL_Low'], 
-            df['CL_Close'],
-            period=self.config.atr_period
+        atr_asset1 = self.calculate_atr(
+            df_aligned['Asset1_High'],   # ← df_aligned
+            df_aligned['Asset1_Low'],    # ← df_aligned
+            df_aligned['Asset1_Close'],  # ← df_aligned
+            period=self.config.risk.atr_period
         )
         
+    # Continue with df_aligned throughout...
+
+        
         # Calculate stop-loss and take-profit for each row
-        risk_adjusted['ATR'] = atr_cl
+        risk_adjusted['ATR'] = atr_asset1
         risk_adjusted['Stop_Loss'] = np.where(
             risk_adjusted['Position'] > 0,
-            df['CL_Close'] - (atr_cl * self.config.atr_stop_multiple),
+            df['Asset1_Close'] - (atr_asset1 * self.config.risk.atr_stop_multiple),
             np.where(
                 risk_adjusted['Position'] < 0,
-                df['CL_Close'] + (atr_cl * self.config.atr_stop_multiple),
+                df['Asset1_Close'] + (atr_asset1 * self.config.risk.atr_stop_multiple),
                 np.nan
             )
         )
         
         risk_adjusted['Take_Profit'] = np.where(
             risk_adjusted['Position'] > 0,
-            df['CL_Close'] + (atr_cl * self.config.atr_target_multiple),
+            df['Asset1_Close'] + (atr_asset1 * self.config.risk.atr_target_multiple),
             np.where(
                 risk_adjusted['Position'] < 0,
-                df['CL_Close'] - (atr_cl * self.config.atr_target_multiple),
+                df['Asset1_Close'] - (atr_asset1 * self.config.risk.atr_target_multiple),
                 np.nan
             )
         )
         
         # 3. Calculate risk per trade
+        if asset_type == 'futures':
+            multiplier = self.config.backtest.contract_multiplier
+        else:
+            multiplier = 1.0
+            
         risk_adjusted['Risk_Per_Trade'] = (
-            abs(df['CL_Close'] - risk_adjusted['Stop_Loss']) * 
-            risk_adjusted['Position_Size'] * 1000  # Contract multiplier
-        ) / self.config.initial_capital
+            abs(df['Asset1_Close'] - risk_adjusted['Stop_Loss']) * 
+            risk_adjusted['Position_Size'] * multiplier
+        ) / self.config.risk.initial_capital
         
         # 4. Apply maximum heat filter
         print("3️⃣  Applying portfolio heat limits...")
@@ -283,7 +316,7 @@ class RiskManager:
         ).sum()
         
         # Reduce position if cumulative heat exceeds threshold
-        max_heat = 0.10  # Max 10% total portfolio heat
+        max_heat = self.config.risk.max_portfolio_heat
         risk_adjusted['Position_Size'] = np.where(
             risk_adjusted['Cumulative_Heat'] > max_heat,
             risk_adjusted['Position_Size'] * 0.5,  # Cut position in half
@@ -292,7 +325,7 @@ class RiskManager:
         
         # 5. Volatility regime filter
         print("4️⃣  Applying volatility regime filters...")
-        risk_adjusted['ATR_Percentile'] = atr_cl.rolling(
+        risk_adjusted['ATR_Percentile'] = atr_asset1.rolling(
             window=252, min_periods=60
         ).apply(lambda x: pd.Series(x).rank(pct=True).iloc[-1])
         
@@ -305,13 +338,13 @@ class RiskManager:
         
         # 6. Add risk metadata
         risk_adjusted['Dollar_Risk'] = (
-            abs(df['CL_Close'] - risk_adjusted['Stop_Loss']) * 
-            risk_adjusted['Position_Size'] * 1000
+            abs(df['Asset1_Close'] - risk_adjusted['Stop_Loss']) * 
+            risk_adjusted['Position_Size'] * multiplier
         )
         
         risk_adjusted['Reward_Risk_Ratio'] = (
-            abs(risk_adjusted['Take_Profit'] - df['CL_Close']) /
-            abs(df['CL_Close'] - risk_adjusted['Stop_Loss'])
+            abs(risk_adjusted['Take_Profit'] - df['Asset1_Close']) /
+            abs(df['Asset1_Close'] - risk_adjusted['Stop_Loss'])
         )
         
         self._print_risk_summary(risk_adjusted)
@@ -328,11 +361,11 @@ class RiskManager:
             return
         
         print("\n" + "=" * 60)
-        print("📊 RISK MANAGEMENT SUMMARY")
+        print(f"📊 RISK MANAGEMENT SUMMARY: {self.pair_name}")
         print("=" * 60)
         print(f"Active positions:           {len(active_positions)}")
-        print(f"Average position size:      {active_positions['Position_Size'].mean():.2f} contracts")
-        print(f"Max position size:          {active_positions['Position_Size'].max():.2f} contracts")
+        print(f"Average position size:      {active_positions['Position_Size'].mean():.2f} units")
+        print(f"Max position size:          {active_positions['Position_Size'].max():.2f} units")
         print(f"Average risk per trade:     {active_positions['Risk_Per_Trade'].mean()*100:.2f}%")
         print(f"Max portfolio heat:         {active_positions['Cumulative_Heat'].max()*100:.2f}%")
         print(f"Average reward/risk ratio:  {active_positions['Reward_Risk_Ratio'].mean():.2f}:1")
@@ -395,7 +428,35 @@ class RiskManager:
         fractional_kelly = kelly * 0.25
         
         return max(0, fractional_kelly)  # Never go negative
+
+
+# ============================================================================
+# EXAMPLE USAGE
+# ============================================================================
+
+if __name__ == "__main__":
+    from config import Config
+    from data_handler import PairsDataHandler
+    from strategy import PairsMeanReversionStrategy
     
-
-
-
+    # Example: Risk management for SPY-QQQ
+    config = Config(asset1='SPY', asset2='QQQ')
+    
+    # Fetch data
+    handler = PairsDataHandler(config, 'SPY', 'QQQ')
+    df = handler.fetch_data()
+    spread = handler.compute_spread(method='log')
+    
+    # Generate signals
+    strategy = PairsMeanReversionStrategy(config)
+    signals = strategy.generate_signals(df, spread)
+    
+    # Apply risk management
+    risk_manager = PairsRiskManager(config, pair_name='SPY-QQQ')
+    risk_adjusted_signals = risk_manager.apply_risk_filters(
+        df, 
+        signals,
+        asset_type='etf'  # SPY/QQQ are ETFs
+    )
+    
+    print("\n✅ Risk management applied successfully!")

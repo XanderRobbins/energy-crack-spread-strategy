@@ -1,6 +1,6 @@
 """
-Comprehensive backtesting engine with walk-forward analysis
-Includes transaction costs, slippage, and detailed performance tracking
+Comprehensive backtesting engine for pairs trading strategies
+Supports stocks, ETFs, futures, commodities, and any cointegrated pairs
 """
 import pandas as pd
 import numpy as np
@@ -9,9 +9,10 @@ import warnings
 from scipy import stats
 warnings.filterwarnings('ignore')
 
-class Backtester:
+
+class PairsBacktester:
     """
-    Professional-grade backtesting engine
+    Professional-grade backtesting engine for pairs trading
     
     Features:
     - Realistic transaction costs and slippage
@@ -20,10 +21,19 @@ class Backtester:
     - Monte Carlo simulation
     - Multiple performance metrics
     - Trade journal with detailed analytics
+    - Support for any asset pair (stocks, ETFs, futures, etc.)
     """
     
-    def __init__(self, config):
+    def __init__(self, config, pair_name: Optional[str] = None):
+        """
+        Initialize backtester
+        
+        Args:
+            config: Configuration object
+            pair_name: Optional descriptive name for the pair
+        """
         self.config = config
+        self.pair_name = pair_name or config.pair.pair_name
         self.results = None
         self.trades = []
         self.equity_curve = None
@@ -41,7 +51,7 @@ class Backtester:
             DataFrame with complete backtest results
         """
         print("\n" + "=" * 60)
-        print("🚀 RUNNING BACKTEST")
+        print(f"🚀 RUNNING BACKTEST: {self.pair_name}")
         print("=" * 60)
         
         capital = initial_capital or self.config.initial_capital
@@ -80,59 +90,76 @@ class Backtester:
         return df
     
     def _calculate_returns(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate returns from actual leg positions (SPY and QQQ)"""
+        """
+        Calculate returns from pair positions using optimal hedge ratio
         
+        Works for any asset pair: stocks, ETFs, futures, commodities, crypto
+        """
         # Calculate individual asset returns
-        df['CL_Return'] = df['CL_Close'].pct_change()  # SPY return
-        df['HO_Return'] = df['HO_Close'].pct_change()  # QQQ return
+        df['Asset1_Return'] = df['Asset1_Close'].pct_change()
+        df['Asset2_Return'] = df['Asset2_Close'].pct_change()
         
-        # For long spread: buy SPY, short QQQ (equal dollar amounts)
-        # For short spread: short SPY, buy QQQ
-        df['Leg1_Return'] = df['Position'].shift(1) * df['CL_Return']
-        df['Leg2_Return'] = -df['Position'].shift(1) * df['HO_Return']
+        # Get hedge ratio (default to 1:1 if not available)
+        if 'Hedge_Ratio' in df.columns:
+            hedge_ratio = df['Hedge_Ratio']
+        else:
+            hedge_ratio = 1.0
         
-        # Combined return (50/50 allocation between legs)
-        df['Gross_Return'] = (df['Leg1_Return'] + df['Leg2_Return']) / 2
+        # For long spread: long Asset1, short Asset2 weighted by hedge ratio
+        # Position > 0: Buy spread (Asset1 up, Asset2 down = profit)
+        # Position < 0: Sell spread (Asset1 down, Asset2 up = profit)
+        df['Leg1_Return'] = df['Position'].shift(1) * df['Asset1_Return']
+        df['Leg2_Return'] = -df['Position'].shift(1) * hedge_ratio * df['Asset2_Return']
+        
+        # Gross return is the combined leg performance
+        df['Gross_Return'] = df['Leg1_Return'] + df['Leg2_Return']
         
         # Handle NaN values
         df['Gross_Return'].fillna(0, inplace=True)
         
         return df
-
-
+    
     def _apply_transaction_costs(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Apply realistic transaction costs
+        Apply realistic transaction costs and slippage
         
-        Costs include:
-        - Bid-ask spread (captured in slippage)
-        - Commission per contract
-        - Impact cost (for large orders)
+        Costs applied when position changes (entry/exit/scaling)
         """
-        # Detect position changes (entries/exits/scaling)
-        df['Position_Change'] = df['Position'].diff().abs()
+        # Detect position changes (entries, exits, scaling)
+        df['Position_Change'] = df['Position'].diff().fillna(0)
+        df['Trade_Occurred'] = (df['Position_Change'] != 0).astype(int)
         
-        # Commission cost (per contract, convert to percentage of capital)
-        contract_value = 1000  # CL contract = 1000 barrels
-        df['Commission'] = (
-            df['Position_Change'] * 
-            df['Position_Size'] * 
-            self.config.commission_per_contract
-        ) / self.config.initial_capital
-        
-        # Slippage cost (percentage of position value)
-        df['Slippage'] = df['Position_Change'] * self.config.slippage_pct
-        
-        # Bid-ask spread cost
-        df['Transaction_Cost'] = (
-            df['Position_Change'] * self.config.transaction_cost_pct
+        # Transaction cost = commission + slippage
+        total_cost_pct = (
+            self.config.backtest.transaction_cost_pct + 
+            self.config.backtest.slippage_pct
         )
         
-        # Total costs
-        df['Total_Costs'] = df['Commission'] + df['Slippage'] + df['Transaction_Cost']
+        # Apply costs only when trades occur
+        # Cost proportional to size of position change
+        df['Transaction_Cost'] = (
+            abs(df['Position_Change']) * total_cost_pct * df['Trade_Occurred']
+        )
         
-        # Net return after costs
-        df['Net_Return'] = df['Gross_Return'] - df['Total_Costs']
+        # Futures-specific: Add per-contract commission
+        if self.config.backtest.commission_per_contract > 0:
+            df['Commission_Dollar'] = (
+                abs(df['Position_Change']) * 
+                self.config.backtest.commission_per_contract
+            )
+            # Convert to percentage of portfolio
+            df['Transaction_Cost'] += df['Commission_Dollar'] / self.config.initial_capital
+        
+        # Net return = Gross return - Transaction costs
+        df['Net_Return'] = df['Gross_Return'] - df['Transaction_Cost']
+        
+        # Summary statistics
+        total_costs = df['Transaction_Cost'].sum() * 100
+        num_trades = df['Trade_Occurred'].sum()
+        
+        print(f"   Total transaction costs: {total_costs:.4f}%")
+        print(f"   Number of transactions: {num_trades}")
+        print(f"   Avg cost per transaction: {total_costs/num_trades:.4f}%" if num_trades > 0 else "   Avg cost per transaction: N/A")
         
         return df
     
@@ -148,25 +175,6 @@ class Backtester:
         
         # Daily P&L in dollars
         df['Daily_PnL'] = df['Portfolio_Value'].diff().fillna(0)
-        
-        return df
-    
-
-    def _apply_circuit_breakers(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Stop trading if catastrophic losses occur"""
-        
-        for i in range(len(df)):
-            # Stop if portfolio goes negative
-            if df['Portfolio_Value'].iloc[i] < 0:
-                print(f"\n🚨 CIRCUIT BREAKER: Portfolio went negative on {df.index[i]}")
-                df.loc[df.index[i]:, 'Position'] = 0
-                break
-            
-            # Stop if drawdown > 50%
-            if df['Drawdown'].iloc[i] < -0.50:
-                print(f"\n🚨 CIRCUIT BREAKER: 50% drawdown hit on {df.index[i]}")
-                df.loc[df.index[i]:, 'Position'] = 0
-                break
         
         return df
     
@@ -192,6 +200,25 @@ class Backtester:
             else:
                 underwater_count = 0
             df['Days_Underwater'].iloc[i] = underwater_count
+        
+        return df
+    
+    def _apply_circuit_breakers(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Stop trading if catastrophic losses occur"""
+        
+        for i in range(len(df)):
+            # Stop if portfolio goes negative
+            if df['Portfolio_Value'].iloc[i] < 0:
+                print(f"\n🚨 CIRCUIT BREAKER: Portfolio went negative on {df.index[i]}")
+                df.loc[df.index[i]:, 'Position'] = 0
+                break
+            
+            # Stop if drawdown > max allowed
+            max_dd_threshold = self.config.risk.max_drawdown_stop if hasattr(self.config.risk, 'max_drawdown_stop') else 0.50
+            if df['Drawdown'].iloc[i] < -max_dd_threshold:
+                print(f"\n🚨 CIRCUIT BREAKER: {max_dd_threshold*100:.0f}% drawdown hit on {df.index[i]}")
+                df.loc[df.index[i]:, 'Position'] = 0
+                break
         
         return df
     
@@ -286,7 +313,7 @@ class Backtester:
         
         # Rolling volatility
         df['Rolling_Volatility'] = (
-            returns.rolling(window).std() * np.sqrt(252)
+            returns.rolling(window).std() * np.sqrt(252) * 100
         )
         
         # Rolling win rate
@@ -307,7 +334,7 @@ class Backtester:
             raise ValueError("Run backtest first")
         
         print("\n" + "=" * 60)
-        print("📊 PERFORMANCE METRICS")
+        print(f"📊 PERFORMANCE METRICS: {self.pair_name}")
         print("=" * 60)
         
         df = self.results
@@ -521,265 +548,20 @@ class Backtester:
         print(f"Total P&L:                 ${metrics['Total_PnL']:>11,.2f}")
         
         print("=" * 60 + "\n")
-    
+
+
     def get_trade_dataframe(self) -> pd.DataFrame:
-        """Return trades as DataFrame for easy analysis"""
-        return pd.DataFrame(self.trades) if self.trades else pd.DataFrame()
-    
-    def monte_carlo_simulation(self, n_simulations: int = 1000, 
-                              n_trades: Optional[int] = None) -> Dict:
         """
-        Run Monte Carlo simulation by bootstrapping trades
-        
-        Args:
-            n_simulations: Number of simulation runs
-            n_trades: Number of trades per simulation (default: actual number)
+        Return trades as DataFrame for easy analysis
         
         Returns:
-            Dictionary with simulation results
+            pd.DataFrame: Trades with all metadata
         """
         if not self.trades:
-            raise ValueError("No trades to simulate")
+            return pd.DataFrame()
         
-        print(f"\n🎲 Running Monte Carlo simulation ({n_simulations} runs)...")
-        
-        trades_df = pd.DataFrame(self.trades)
-        n_trades = n_trades or len(trades_df)
-        
-        # Store simulation results
-        simulation_results = []
-        
-        for sim in range(n_simulations):
-            # Randomly sample trades with replacement (bootstrap)
-            sampled_trades = trades_df.sample(n=n_trades, replace=True)
-            
-            # Calculate cumulative return for this simulation
-            cumulative_return = (1 + sampled_trades['Portfolio_PnL_Pct'] / 100).prod() - 1
-            final_value = self.config.initial_capital * (1 + cumulative_return)
-            
-            simulation_results.append({
-                'Simulation': sim + 1,
-                'Final_Value': final_value,
-                'Total_Return_Pct': cumulative_return * 100,
-                'Max_DD': self._calculate_sim_drawdown(sampled_trades),
-                'Sharpe': self._calculate_sim_sharpe(sampled_trades)
-            })
-        
-        results_df = pd.DataFrame(simulation_results)
-        
-        # Calculate confidence intervals
-        percentiles = [5, 25, 50, 75, 95]
-        summary = {
-            'Mean_Final_Value': results_df['Final_Value'].mean(),
-            'Std_Final_Value': results_df['Final_Value'].std(),
-            'Mean_Return_Pct': results_df['Total_Return_Pct'].mean(),
-            'Std_Return_Pct': results_df['Total_Return_Pct'].std(),
-        }
-        
-        for p in percentiles:
-            summary[f'Percentile_{p}_Return'] = np.percentile(results_df['Total_Return_Pct'], p)
-            summary[f'Percentile_{p}_Value'] = np.percentile(results_df['Final_Value'], p)
-        
-        # Probability of profit
-        summary['Probability_of_Profit'] = (results_df['Total_Return_Pct'] > 0).sum() / n_simulations * 100
-        
-        # Risk of ruin (losing more than 20%)
-        summary['Risk_of_Ruin_20pct'] = (results_df['Total_Return_Pct'] < -20).sum() / n_simulations * 100
-        
-        print(f"\n✅ Monte Carlo simulation complete!")
-        print(f"\nResults over {n_simulations} simulations:")
-        print(f"  Mean return: {summary['Mean_Return_Pct']:.2f}%")
-        print(f"  Std dev: {summary['Std_Return_Pct']:.2f}%")
-        print(f"  5th percentile: {summary['Percentile_5_Return']:.2f}%")
-        print(f"  95th percentile: {summary['Percentile_95_Return']:.2f}%")
-        print(f"  Probability of profit: {summary['Probability_of_Profit']:.1f}%")
-        print(f"  Risk of 20%+ loss: {summary['Risk_of_Ruin_20pct']:.1f}%")
-        
-        return {
-            'summary': summary,
-            'detailed_results': results_df
-        }
-    
-    def _calculate_sim_drawdown(self, trades_df: pd.DataFrame) -> float:
-        """Calculate max drawdown for a simulated sequence of trades"""
-        cumulative = (1 + trades_df['Portfolio_PnL_Pct'] / 100).cumprod()
-        running_max = cumulative.cummax()
-        drawdown = (cumulative - running_max) / running_max
-        return drawdown.min() * 100
-    
-    def _calculate_sim_sharpe(self, trades_df: pd.DataFrame, rf_rate: float = 0.02) -> float:
-        """Calculate Sharpe ratio for simulated trades"""
-        returns = trades_df['Portfolio_PnL_Pct'] / 100
-        excess = returns.mean() - rf_rate / 252
-        return (excess / returns.std()) * np.sqrt(252) if returns.std() > 0 else 0
-    
-    def walk_forward_analysis(self, df: pd.DataFrame, 
-                             strategy_func, 
-                             train_window: int = 504,
-                             test_window: int = 126) -> Dict:
-        """
-        Perform walk-forward optimization
-        
-        Args:
-            df: Full dataset
-            strategy_func: Function that takes df and returns signals
-            train_window: Training period (days) - default 2 years
-            test_window: Testing period (days) - default 6 months
-        
-        Returns:
-            Dictionary with walk-forward results
-        """
-        print("\n" + "=" * 60)
-        print("🔄 WALK-FORWARD ANALYSIS")
-        print("=" * 60)
-        
-        results = []
-        total_periods = (len(df) - train_window) // test_window
-        
-        print(f"\nTotal periods: {total_periods}")
-        print(f"Train window: {train_window} days ({train_window/252:.1f} years)")
-        print(f"Test window: {test_window} days ({test_window/252:.1f} years)")
-        
-        for i in range(total_periods):
-            # Define train and test periods
-            train_start = i * test_window
-            train_end = train_start + train_window
-            test_start = train_end
-            test_end = test_start + test_window
-            
-            if test_end > len(df):
-                break
-            
-            train_data = df.iloc[train_start:train_end]
-            test_data = df.iloc[test_start:test_end]
-            
-            print(f"\nPeriod {i+1}/{total_periods}")
-            print(f"  Train: {train_data.index[0].date()} to {train_data.index[-1].date()}")
-            print(f"  Test:  {test_data.index[0].date()} to {test_data.index[-1].date()}")
-            
-            # Generate signals for test period using strategy optimized on train period
-            test_signals = strategy_func(test_data)
-            
-            # Run backtest on test period
-            backtest_results = self.run_backtest(test_signals)
-            metrics = self.calculate_performance_metrics()
-            
-            results.append({
-                'Period': i + 1,
-                'Train_Start': train_data.index[0],
-                'Train_End': train_data.index[-1],
-                'Test_Start': test_data.index[0],
-                'Test_End': test_data.index[-1],
-                'Return_Pct': metrics['Total_Return_Pct'],
-                'Sharpe': metrics['Sharpe_Ratio'],
-                'Max_DD_Pct': metrics['Max_Drawdown_Pct'],
-                'Win_Rate_Pct': metrics['Win_Rate_Pct'],
-                'Total_Trades': metrics['Total_Trades']
-            })
-        
-        results_df = pd.DataFrame(results)
-        
-        # Aggregate statistics
-        summary = {
-            'Avg_Return_Pct': results_df['Return_Pct'].mean(),
-            'Std_Return_Pct': results_df['Return_Pct'].std(),
-            'Avg_Sharpe': results_df['Sharpe'].mean(),
-            'Avg_Max_DD_Pct': results_df['Max_DD_Pct'].mean(),
-            'Win_Rate_Consistency': (results_df['Return_Pct'] > 0).sum() / len(results_df) * 100,
-            'Worst_Period_Return': results_df['Return_Pct'].min(),
-            'Best_Period_Return': results_df['Return_Pct'].max(),
-        }
-        
-        print("\n" + "=" * 60)
-        print("📊 WALK-FORWARD SUMMARY")
-        print("=" * 60)
-        print(f"Average return per period: {summary['Avg_Return_Pct']:.2f}%")
-        print(f"Return std deviation: {summary['Std_Return_Pct']:.2f}%")
-        print(f"Average Sharpe ratio: {summary['Avg_Sharpe']:.2f}")
-        print(f"Periods with positive returns: {summary['Win_Rate_Consistency']:.1f}%")
-        print(f"Best period: {summary['Best_Period_Return']:.2f}%")
-        print(f"Worst period: {summary['Worst_Period_Return']:.2f}%")
-        print("=" * 60)
-        
-        return {
-            'summary': summary,
-            'period_results': results_df
-        }
-    
-    def benchmark_comparison(self, benchmark_ticker: str = 'SPY') -> pd.DataFrame:
-        """
-        Compare strategy performance to benchmark
-        
-        Args:
-            benchmark_ticker: Ticker symbol for benchmark (default SPY)
-        
-        Returns:
-            DataFrame with comparative metrics
-        """
-        if self.results is None:
-            raise ValueError("Run backtest first")
-        
-        print(f"\n📊 Comparing to {benchmark_ticker} benchmark...")
-        
-        # Fetch benchmark data
-        import yfinance as yf
-        benchmark_data = yf.download(
-            benchmark_ticker,
-            start=self.results.index[0],
-            end=self.results.index[-1],
-            progress=False
-        )['Close']
-        
-        # Align dates
-        benchmark_data = benchmark_data.reindex(self.results.index, method='ffill')
-        benchmark_returns = benchmark_data.pct_change().fillna(0)
-        
-        # Calculate metrics
-        strategy_metrics = self.calculate_performance_metrics()
-        
-        benchmark_cumulative = (1 + benchmark_returns).cumprod()
-        benchmark_total_return = (benchmark_cumulative.iloc[-1] - 1) * 100
-        benchmark_volatility = benchmark_returns.std() * np.sqrt(252) * 100
-        benchmark_sharpe = (benchmark_returns.mean() / benchmark_returns.std()) * np.sqrt(252)
-        
-        # Create comparison DataFrame
-        comparison = pd.DataFrame({
-            'Metric': [
-                'Total Return (%)',
-                'Annualized Volatility (%)',
-                'Sharpe Ratio',
-                'Max Drawdown (%)',
-            ],
-            'Strategy': [
-                strategy_metrics['Total_Return_Pct'],
-                strategy_metrics['Annualized_Volatility_Pct'],
-                strategy_metrics['Sharpe_Ratio'],
-                strategy_metrics['Max_Drawdown_Pct'],
-            ],
-            f'{benchmark_ticker}': [
-                benchmark_total_return,
-                benchmark_volatility,
-                benchmark_sharpe,
-                self._calculate_benchmark_drawdown(benchmark_cumulative),
-            ]
-        })
-        
-        comparison['Difference'] = comparison['Strategy'] - comparison[f'{benchmark_ticker}']
-        
-        print("\n" + "=" * 60)
-        print(f"STRATEGY vs {benchmark_ticker}")
-        print("=" * 60)
-        print(comparison.to_string(index=False))
-        print("=" * 60)
-        
-        return comparison
-    
-    def _calculate_benchmark_drawdown(self, cumulative_returns: pd.Series) -> float:
-        """Calculate drawdown for benchmark"""
-        running_max = cumulative_returns.cummax()
-        drawdown = (cumulative_returns - running_max) / running_max
-        return drawdown.min() * 100
-    
+        return pd.DataFrame(self.trades)
+
     def generate_trade_journal(self, filepath: str = 'results/trade_journal.csv'):
         """
         Export detailed trade journal to CSV

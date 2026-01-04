@@ -1,6 +1,6 @@
 """
-Enhanced crack spread mean-reversion strategy for CL-HO pair
-Implements sophisticated entry/exit logic with regime detection
+Universal mean-reversion strategy for pairs trading
+Supports stocks, ETFs, futures, commodities, and any cointegrated pairs
 """
 import pandas as pd
 import numpy as np
@@ -8,38 +8,52 @@ from typing import Tuple, Optional, Dict
 import warnings
 warnings.filterwarnings('ignore')
 
-class CrackSpreadStrategy:
+
+class PairsMeanReversionStrategy:
     """
-    Sophisticated mean-reversion strategy for CL-HO crack spread
+    Sophisticated mean-reversion strategy for cointegrated pairs
     
     Features:
     - Dynamic z-score thresholds based on volatility regime
-    - Regime detection (mean-reverting vs trending markets)
+    - Market regime detection (mean-reverting vs trending)
     - Multiple entry/exit conditions
     - Position pyramiding support
     - Adaptive lookback windows
     - Momentum filters to avoid catching falling knives
+    - Optional rolling cointegration filter
+    
+    Works with any pair: stocks, ETFs, futures, commodities, crypto
     """
     
-    def __init__(self, config):
+    def __init__(self, config, pair_name: Optional[str] = None):
+        """
+        Initialize strategy
+        
+        Args:
+            config: Configuration object
+            pair_name: Optional name for the pair (e.g., 'SPY-QQQ')
+        """
         self.config = config
+        self.pair_name = pair_name or config.pair.pair_name
         self.signals = None
         self.spread = None
         self.trade_log = []
         
-    def generate_signals(self, df: pd.DataFrame, spread: pd.Series) -> pd.DataFrame:
+    def generate_signals(self, df: pd.DataFrame, spread: pd.Series,
+                        rolling_coint: Optional[pd.DataFrame] = None) -> pd.DataFrame:
         """
         Generate trading signals with enhanced logic
         
         Args:
-            df: DataFrame with OHLCV data for CL and HO
-            spread: Pre-computed spread series (typically log(CL/HO))
+            df: DataFrame with OHLCV data for both assets
+            spread: Pre-computed spread series (typically log spread)
+            rolling_coint: Optional rolling cointegration results for filtering
         
         Returns:
             DataFrame with signals and intermediate calculations
         """
         print("\n" + "=" * 60)
-        print("📈 GENERATING TRADING SIGNALS")
+        print(f"📈 GENERATING TRADING SIGNALS: {self.pair_name}")
         print("=" * 60)
         
         signals = df.copy()
@@ -51,19 +65,19 @@ class CrackSpreadStrategy:
         signals = self._calculate_zscore(signals)
         
         # === 2. Regime Detection ===
-        if self.config.use_regime_filter:
+        if self.config.strategy.use_regime_filter:
             print("2️⃣  Detecting market regime...")
             signals = self._detect_regime(signals)
         else:
             signals['Regime'] = 'Neutral'
         
         # === 3. Volatility Adjustment ===
-        if self.config.use_dynamic_thresholds:
+        if self.config.strategy.use_dynamic_thresholds:
             print("3️⃣  Adjusting thresholds for volatility...")
             signals = self._adjust_thresholds(signals)
         else:
-            signals['Z_Threshold_Long'] = self.config.z_entry_long
-            signals['Z_Threshold_Short'] = self.config.z_entry_short
+            signals['Z_Threshold_Long'] = self.config.strategy.z_entry_long
+            signals['Z_Threshold_Short'] = self.config.strategy.z_entry_short
         
         # === 4. Momentum Filter ===
         print("4️⃣  Adding momentum filters...")
@@ -71,7 +85,7 @@ class CrackSpreadStrategy:
         
         # === 5. Generate Entry Signals ===
         print("5️⃣  Generating entry signals...")
-        signals = self._generate_entry_signals(signals)
+        signals = self._generate_entry_signals(signals, rolling_coint)
         
         # === 6. Generate Exit Signals ===
         print("6️⃣  Generating exit signals...")
@@ -95,28 +109,28 @@ class CrackSpreadStrategy:
         
         # Primary z-score (trading signal)
         df['Rolling_Mean'] = df['Spread'].rolling(
-            window=self.config.window,
-            min_periods=self.config.window
+            window=self.config.strategy.window,
+            min_periods=self.config.strategy.window
         ).mean()
         
         df['Rolling_Std'] = df['Spread'].rolling(
-            window=self.config.window,
-            min_periods=self.config.window
+            window=self.config.strategy.window,
+            min_periods=self.config.strategy.window
         ).std()
         
-        # Z-score
+        # Z-score: (current - mean) / std
         df['Z_Score'] = (df['Spread'] - df['Rolling_Mean']) / df['Rolling_Std']
         
         # Long-term mean for regime detection
         df['LT_Mean'] = df['Spread'].rolling(
-            window=self.config.lookback_period,
-            min_periods=self.config.lookback_period // 2
+            window=self.config.strategy.lookback_period,
+            min_periods=self.config.strategy.lookback_period // 2
         ).mean()
         
         # Long-term std for comparison
         df['LT_Std'] = df['Spread'].rolling(
-            window=self.config.lookback_period,
-            min_periods=self.config.lookback_period // 2
+            window=self.config.strategy.lookback_period,
+            min_periods=self.config.strategy.lookback_period // 2
         ).std()
         
         return df
@@ -127,8 +141,8 @@ class CrackSpreadStrategy:
         Uses moving average crossovers and volatility expansion
         """
         # Short and long-term MAs of spread
-        df['SMA_Fast'] = df['Spread'].rolling(self.config.trend_sma_fast).mean()
-        df['SMA_Slow'] = df['Spread'].rolling(self.config.trend_sma_slow).mean()
+        df['SMA_Fast'] = df['Spread'].rolling(self.config.strategy.trend_sma_fast).mean()
+        df['SMA_Slow'] = df['Spread'].rolling(self.config.strategy.trend_sma_slow).mean()
         
         # Regime classification based on trend strength
         conditions = [
@@ -158,13 +172,15 @@ class CrackSpreadStrategy:
         - High volatility: Use wider thresholds (fewer, higher quality trades)
         """
         # Calculate volatility ratio
-        vol_ratio = df['Rolling_Std'] / df['Rolling_Std'].rolling(self.config.vol_lookback).mean()
+        vol_ratio = df['Rolling_Std'] / df['Rolling_Std'].rolling(
+            self.config.strategy.vol_lookback
+        ).mean()
         
         # Adjust thresholds (inverse relationship with volatility)
         # When vol is high (ratio > 1), make thresholds more extreme
         # When vol is low (ratio < 1), make thresholds tighter
-        df['Z_Threshold_Long'] = self.config.z_entry_long * vol_ratio
-        df['Z_Threshold_Short'] = self.config.z_entry_short * vol_ratio
+        df['Z_Threshold_Long'] = self.config.strategy.z_entry_long * vol_ratio
+        df['Z_Threshold_Short'] = self.config.strategy.z_entry_short * vol_ratio
         
         # Clamp thresholds to reasonable bounds
         df['Z_Threshold_Long'] = df['Z_Threshold_Long'].clip(lower=-3.5, upper=-1.5)
@@ -199,47 +215,57 @@ class CrackSpreadStrategy:
         
         return df
     
-    def _generate_entry_signals(self, df: pd.DataFrame, 
-                         rolling_coint: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    def _generate_entry_signals(self, df: pd.DataFrame,
+                                rolling_coint: Optional[pd.DataFrame] = None) -> pd.DataFrame:
         """
-        Generate entry signals with cointegration filter
+        Generate entry signals with optional cointegration filter
         
-        Args:
-            df: Market data
-            rolling_coint: Rolling cointegration results (if available)
+        Entry logic:
+        - Long: Z-score < threshold, mean-reverting regime, good momentum
+        - Short: Z-score > threshold, mean-reverting regime, good momentum
+        - Optional: Only trade when pair is cointegrated
         """
         df['Signal'] = 0
         
-        # === Existing entry logic ===
-        long_condition = (
-            (df['Z_Score'] < df['Z_Threshold_Long']) &
-            (df['Regime_Composite'].isin(['Mean_Reverting', 'Trending_Down'])) &
-            (df['Long_Momentum_OK'])
-        )
+        # Base entry conditions
+        long_zscore = df['Z_Score'] < df['Z_Threshold_Long']
+        long_regime = df['Regime_Composite'].isin(['Mean_Reverting', 'Trending_Down'])
+        long_momentum = df['Long_Momentum_OK']
         
-        short_condition = (
-            (df['Z_Score'] > df['Z_Threshold_Short']) &
-            (df['Regime_Composite'].isin(['Mean_Reverting', 'Trending_Up'])) &
-            (df['Short_Momentum_OK'])
-        )
+        short_zscore = df['Z_Score'] > df['Z_Threshold_Short']
+        short_regime = df['Regime_Composite'].isin(['Mean_Reverting', 'Trending_Up'])
+        short_momentum = df['Short_Momentum_OK']
         
-        # === NEW: Cointegration Filter ===
-        if rolling_coint is not None:
-            # Align cointegration status with trading signals
-            coint_status = rolling_coint['Is_Cointegrated'].reindex(df.index, method='ffill')
-            
-            # Only trade when cointegrated
-            long_condition = long_condition & coint_status
-            short_condition = short_condition & coint_status
-            
-            print(f"   Cointegration filter active: trading only {coint_status.sum()} / {len(df)} days")
+        long_condition = long_zscore & long_regime & long_momentum
+        short_condition = short_zscore & short_regime & short_momentum
         
+        # Apply cointegration filter if available
+        if rolling_coint is not None and not rolling_coint.empty:
+            print("   ✅ Applying rolling cointegration filter...")
+            try:
+                coint_status = rolling_coint['Is_Cointegrated'].reindex(
+                    df.index, method='ffill'
+                ).fillna(False)
+                
+                long_condition = long_condition & coint_status
+                short_condition = short_condition & coint_status
+                
+                cointegrated_days = coint_status.sum()
+                total_days = len(df)
+                pct_coint = (cointegrated_days / total_days * 100) if total_days > 0 else 0
+                print(f"   Trading on {cointegrated_days}/{total_days} days ({pct_coint:.1f}%)")
+            except Exception as e:
+                print(f"   ⚠️ Warning: Could not apply cointegration filter: {e}")
+                print("   Proceeding without cointegration filter...")
+        else:
+            print("   ℹ️  No cointegration filter applied (all periods eligible)")
+        
+        # Set signals
         df.loc[long_condition, 'Signal'] = 1
         df.loc[short_condition, 'Signal'] = -1
         
         return df
-
-
+    
     def _generate_exit_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Generate exit signals based on multiple criteria
@@ -248,15 +274,9 @@ class CrackSpreadStrategy:
         1. Z-score crosses back to mean (primary exit)
         2. Z-score reverses direction (stop loss)
         3. Regime changes to unfavorable (risk management)
-        4. Time-based exit (max holding period)
         """
         # Primary exit: z-score crosses exit threshold
-        df['Exit_Mean_Reversion'] = abs(df['Z_Score']) < self.config.z_exit
-        
-        # Stop-loss exit: z-score moves against position
-        df['Exit_Stop_Loss'] = False
-        
-        # Will be applied in position management based on current position
+        df['Exit_Mean_Reversion'] = abs(df['Z_Score']) < self.config.strategy.z_exit
         
         # Regime change exit
         df['Exit_Regime_Change'] = df['Regime_Composite'] == 'Volatile_Trending'
@@ -270,9 +290,9 @@ class CrackSpreadStrategy:
         Logic flow:
         1. Initialize position = 0
         2. Enter on signal
-        3. Scale in if conditions improve
+        3. Scale in if conditions improve (optional)
         4. Exit on any exit condition
-        5. Track position size
+        5. Track position size and pyramid level
         """
         df['Position'] = 0.0
         df['Position_Size'] = 0.0
@@ -328,17 +348,19 @@ class CrackSpreadStrategy:
                     entry_zscore = df.loc[idx, 'Z_Score']
             
             # === Check Scaling Conditions ===
-            elif self.config.scale_in_enabled and pyramid_level < self.config.max_pyramid_levels:
+            elif (self.config.strategy.scale_in_enabled and 
+                  pyramid_level < self.config.strategy.max_pyramid_levels):
+                
                 # Scale into long if z-score gets more negative
                 if current_position > 0 and entry_zscore is not None:
-                    if df.loc[idx, 'Z_Score'] < (entry_zscore - self.config.scale_in_threshold):
+                    if df.loc[idx, 'Z_Score'] < (entry_zscore - self.config.strategy.scale_in_threshold):
                         pyramid_level += 1
                         current_position = float(pyramid_level)
                         entry_zscore = df.loc[idx, 'Z_Score']
                 
                 # Scale into short if z-score gets more positive
                 elif current_position < 0 and entry_zscore is not None:
-                    if df.loc[idx, 'Z_Score'] > (entry_zscore + self.config.scale_in_threshold):
+                    if df.loc[idx, 'Z_Score'] > (entry_zscore + self.config.strategy.scale_in_threshold):
                         pyramid_level += 1
                         current_position = -float(pyramid_level)
                         entry_zscore = df.loc[idx, 'Z_Score']
@@ -385,43 +407,26 @@ class CrackSpreadStrategy:
         pct_in_market = (days_in_position / total_days) * 100
         
         print("\n" + "=" * 60)
-        print("📊 SIGNAL GENERATION SUMMARY")
+        print(f"📊 SIGNAL GENERATION SUMMARY: {self.pair_name}")
         print("=" * 60)
         print(f"Total trading days:     {total_days}")
         print(f"Total entry signals:    {entry_signals}")
         print(f"  - Long entries:       {long_entries}")
         print(f"  - Short entries:      {short_entries}")
         print(f"Days in position:       {days_in_position} ({pct_in_market:.1f}%)")
-        print(f"Average hold time:      {df[df['Position'] != 0]['Days_In_Trade'].mean():.1f} days")
+        
+        if days_in_position > 0:
+            avg_hold = df[df['Position'] != 0]['Days_In_Trade'].mean()
+            print(f"Average hold time:      {avg_hold:.1f} days")
         
         # Regime breakdown
-        print(f"\nRegime distribution:")
-        regime_counts = df['Regime_Composite'].value_counts()
-        for regime, count in regime_counts.items():
-            print(f"  - {regime}: {count} days ({count/total_days*100:.1f}%)")
+        if 'Regime_Composite' in df.columns:
+            print(f"\nRegime distribution:")
+            regime_counts = df['Regime_Composite'].value_counts()
+            for regime, count in regime_counts.items():
+                print(f"  - {regime}: {count} days ({count/total_days*100:.1f}%)")
         
         print("=" * 60)
-    
-    def calculate_returns(self) -> pd.Series:
-        """
-        Calculate strategy returns
-        
-        Returns are calculated on the spread movement, weighted by position
-        """
-        if self.signals is None:
-            raise ValueError("Signals not generated. Call generate_signals() first.")
-        
-        # Calculate spread returns
-        self.signals['Spread_Return'] = self.signals['Spread'].pct_change()
-        
-        # Strategy return = position * spread return
-        # Note: We use position from previous day (lag 1) because we enter on signal
-        self.signals['Strategy_Return'] = (
-            self.signals['Position'].shift(1) * 
-            self.signals['Spread_Return']
-        )
-        
-        return self.signals['Strategy_Return'].dropna()
     
     def get_trade_list(self) -> pd.DataFrame:
         """
@@ -516,6 +521,9 @@ class CrackSpreadStrategy:
         # Profit factor
         gross_profit = wins['PnL'].sum() if len(wins) > 0 else 0
         gross_loss = abs(losses['PnL'].sum()) if len(losses) > 0 else 1
+        
+
         analysis['profit_factor'] = gross_profit / gross_loss if gross_loss > 0 else np.inf
         
         return analysis
+
