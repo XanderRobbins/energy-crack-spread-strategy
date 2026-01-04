@@ -1,4 +1,4 @@
-# 🚀 Universal Pairs Trading System
+# Universal Pairs Trading System
 
 <div align="center">
 
@@ -18,42 +18,42 @@
 
 The **Universal Pairs Trading System** is a sophisticated mean-reversion strategy framework designed for cointegrated asset pairs. Built with institutional-grade risk management and comprehensive statistical validation, it works seamlessly across stocks, ETFs, futures, commodities, and cryptocurrencies.
 
-### 🎯 What is Pairs Trading?
+### What is Pairs Trading?
 
 Pairs trading is a market-neutral statistical arbitrage strategy that exploits temporary price divergences between two historically correlated assets. When the spread deviates from its historical mean, the strategy goes long the undervalued asset and short the overvalued one, profiting when the spread reverts.
 
 ---
 
-## ✨ Features
+## Features
 
-### 📊 Statistical Validation Suite
+### Statistical Validation Suite
 - **Cointegration Testing** - Engle-Granger methodology
 - **Stationarity Analysis** - Augmented Dickey-Fuller test
 - **Half-Life Calculation** - Mean-reversion speed estimation
 - **Rolling Cointegration** - Dynamic regime detection
 
-### 📈 Advanced Strategy Components
+### Advanced Strategy Components
 - **Dynamic Z-Score Thresholds** - Volatility-adjusted entry/exit
 - **Regime Detection** - Distinguish mean-reverting vs. trending markets
 - **Momentum Filters** - Avoid catching falling knives
 - **Position Pyramiding** - Scale into high-confidence trades
 - **Multiple Exit Strategies** - Mean-reversion, stop-loss, and regime-based
 
-### 🛡️ Risk Management
+### Risk Management
 - **ATR-Based Position Sizing** - Volatility-adjusted exposure
 - **Dynamic Stop-Loss/Take-Profit** - Adaptive risk parameters
 - **Portfolio Heat Management** - Maximum drawdown protection
 - **Circuit Breakers** - Automatic trading halt on catastrophic losses
 - **Kelly Criterion** - Optimal position sizing (optional)
 
-### 🔬 Backtesting & Analysis
+### Backtesting & Analysis
 - **Realistic Transaction Costs** - Commission, slippage, and market impact
 - **Walk-Forward Optimization** - Out-of-sample validation
 - **Monte Carlo Simulation** - Risk assessment via bootstrapping
 - **Comprehensive Metrics** - Sharpe, Sortino, Calmar, drawdown, win rate
 - **Trade Journal Export** - Detailed CSV for further analysis
 
-### 📊 Visualization
+### Visualization
 - Publication-quality charts with institutional aesthetics
 - Equity curves with drawdown
 - Trade distribution analysis
@@ -63,7 +63,7 @@ Pairs trading is a market-neutral statistical arbitrage strategy that exploits t
 
 ---
 
-## 🔧 Installation
+## Installation
 
 ### Prerequisites
 - Python 3.8 or higher
@@ -98,7 +98,7 @@ scipy>=1.10.0
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Interactive Mode
 
@@ -151,7 +151,7 @@ comparison = run_multiple_pairs(pairs, start_date='2015-01-01')
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 ### Project Structure
 
@@ -266,49 +266,9 @@ viz.plot_equity_curve(results, save_path='results/equity.png')
 viz.plot_trade_distribution(trades, save_path='results/trades.png')
 viz.plot_monthly_returns_heatmap(results, save_path='results/monthly.png')
 ```
-
 ---
 
-## 📊 Sample Results
-
-### GLD-SLV (Gold-Silver) Backtest
-
-```
-Period: 2015-01-01 to 2026-01-03
-Initial Capital: $500,000
-
-📈 RETURN METRICS
-Total Return:              45.23%
-CAGR:                       3.52%
-Sharpe Ratio:               1.87
-Max Drawdown:             -12.41%
-
-📊 TRADING
-Total Trades:                 127
-Win Rate:                   68.50%
-Profit Factor:               2.34
-Avg Trade Duration:         14.3 days
-
-💵 CAPITAL
-Initial Capital:       $500,000
-Final Value:           $726,150
-Total P&L:             $226,150
-```
-
-### Performance Comparison (2015-2026)
-
-| PAIR      | TOTAL RETURN | SHARPE | MAX DD   | WIN RATE | TRADES |
-|-----------|--------------|--------|----------|----------|--------|
-| GLD-SLV   | +45.23%      | 1.87   | -12.41%  | 68.5%    | 127    |
-| GLD-GDX   | +38.67%      | 1.64   | -15.32%  | 65.2%    | 143    |
-| CL-HO     | +52.18%      | 2.01   | -18.76%  | 62.8%    | 189    |
-| SPY-QQQ   | -4.90%       | -1.25  | -13.21%  | 80.0%    | 10     |
-
-> **Note:** SPY-QQQ failed cointegration tests - system correctly warned against trading this pair
-
----
-
-## 🎓 Methodology
+## Methodology
 
 ### Entry Logic
 
@@ -345,7 +305,7 @@ Position Size = (Capital × Risk%) / (ATR × Stop Multiple)
 
 ---
 
-## 🔬 Statistical Foundation
+## Statistical Foundation
 
 ### Why Cointegration Matters
 
@@ -363,7 +323,7 @@ Two price series can be correlated but still drift apart permanently. Cointegrat
 
 ---
 
-## ⚙️ Configuration Options
+## Configuration Options
 
 ### Strategy Parameters
 
@@ -397,7 +357,7 @@ config.backtest.commission_per_contract = 2.50 # For futures
 
 ---
 
-## 🔍 Validation & Testing
+## Validation & Testing
 
 ### Walk-Forward Analysis
 
@@ -425,7 +385,7 @@ print(f"95th Percentile Return: {mc_results['summary']['Percentile_95_Return']:.
 
 ---
 
-## 📈 Use Cases
+## Use Cases
 
 ### 1. Equity Pairs
 - SPY vs QQQ (S&P 500 vs Nasdaq)
@@ -451,7 +411,7 @@ print(f"95th Percentile Return: {mc_results['summary']['Percentile_95_Return']:.
 
 ---
 
-## 🚨 Risk Disclosure
+## Risk Disclosure
 
 **This software is for educational and research purposes only.**
 
@@ -464,7 +424,7 @@ print(f"95th Percentile Return: {mc_results['summary']['Percentile_95_Return']:.
 
 ---
 
-## 🛠️ Advanced Features
+## Advanced Features
 
 ### Custom Strategy Development
 
@@ -519,7 +479,7 @@ if signals['Signal'].iloc[-1] == 1:
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
@@ -543,7 +503,7 @@ git push origin feature/amazing-feature
 
 ---
 
-## 📝 Citation
+## Citation
 
 If you use this system in your research, please cite:
 
@@ -559,7 +519,7 @@ If you use this system in your research, please cite:
 
 ---
 
-## 📧 Contact
+## Contact
 
 **Alexander Robbins**
 
@@ -570,13 +530,13 @@ If you use this system in your research, please cite:
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - University of Florida Department of Mathematics
 - Open-source Python community (pandas, numpy, matplotlib, statsmodels)
