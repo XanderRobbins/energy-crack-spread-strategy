@@ -519,16 +519,15 @@ If you use this system in your research, please cite:
 
 ---
 
-## Contact
+## Author
 
-**Alexander Robbins**
-
-- University of Florida - Mathematics, Computer Science, Economics
-- Email: robbins.a@ufl.edu
-- LinkedIn: linkedin.com/in/xander-robbins
-- GitHub: @XanderRobbins
+**Alexander Robbins**  
+University of Florida | Math, CS, Economics  
+📧 robbins.a@ufl.edu  
+🔗 [GitHub](https://github.com/XanderRobbins) | [LinkedIn](https://www.linkedin.com/in/alexander-robbins-a1086a248/) | [Website](https://xanderrobbins.github.io/)
 
 ---
+
 
 ## License
 
