@@ -462,3 +462,53 @@ class PairsDataHandler:
             ),
             'validation': self.validation_results
         }
+    
+    def validate_timezone_alignment(self, df: pd.DataFrame, verbose: bool = True) -> bool:
+        """
+        Validate that both assets trade in compatible timezones
+        
+        Returns:
+            bool: True if timezones are aligned
+        """
+        # Check if index is timezone-aware
+        if df.index.tz is None:
+            if verbose:
+                print("⚠️  Warning: Data has no timezone information")
+                print("   Assuming both assets trade in the same timezone")
+            return True
+        
+        # For production: verify both assets have same trading hours
+        asset1_hours = self._get_trading_hours(self.asset1_ticker)
+        asset2_hours = self._get_trading_hours(self.asset2_ticker)
+        
+        if asset1_hours != asset2_hours:
+            print(f"❌ TIMEZONE MISMATCH:")
+            print(f"   {self.asset1_ticker} trades: {asset1_hours}")
+            print(f"   {self.asset2_ticker} trades: {asset2_hours}")
+            print(f"   This may cause look-ahead bias in backtests")
+            return False
+        
+        if verbose:
+            print(f"✅ Timezone validation passed - both trade in {asset1_hours}")
+        return True
+
+    def align_timezones(self, df: pd.DataFrame, target_tz: str = 'America/New_York') -> pd.DataFrame:
+        """
+        Convert all data to a common timezone
+        
+        Args:
+            df: DataFrame with potentially mixed timezones
+            target_tz: Target timezone (default: US Eastern)
+        
+        Returns:
+            DataFrame with aligned timestamps
+        """
+        if df.index.tz is None:
+            # Localize to UTC first
+            df.index = df.index.tz_localize('UTC')
+        
+        # Convert to target timezone
+        df.index = df.index.tz_convert(target_tz)
+        
+        print(f"✅ All data converted to {target_tz}")
+        return df
